@@ -1,7 +1,8 @@
 version: "3"
 services:
   jenkins:
-    image: madmilodz/jenkinsci:v3
+    build: ./jenkins
+    image: jenkinsci-local:lts
     container_name: jenkins
     environment:
       - DOCKER_HOST=tcp://localhost:2375
@@ -9,6 +10,8 @@ services:
       - JENKINS_UC_EXPERIMENTAL=http://updates.jenkins.io/experimental
       - JENKINS_INCREMENTALS_REPO_MIRROR=http://repo.jenkins-ci.org/incrementals
       - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
+      - JENKINS_ADMIN_ID=${JENKINS_ADMIN_ID:-admin}
+      - JENKINS_ADMIN_PASSWORD=${JENKINS_ADMIN_PASSWORD:?define JENKINS_ADMIN_PASSWORD en .env}
     user: root
     ports:
       - "80:8080"
@@ -37,7 +40,7 @@ services:
       - sonarqube_extensions:/opt/sonarqube/extensions
 
   db:
-    image: postgres
+    image: postgres:12
     environment:
       - POSTGRES_USER=sonar
       - POSTGRES_PASSWORD=sonar

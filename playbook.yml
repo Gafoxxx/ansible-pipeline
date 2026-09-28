@@ -2,14 +2,20 @@
 - name: Instalar y configurar Nginx
   hosts: nginx
   become: true
+  vars:
+    teclado_repo: https://github.com/Gafoxxx/Teclado.git
+    teclado_version: main
   tasks:
     - name: Actualizar cache de paquetes
       apt:
         update_cache: yes
+        cache_valid_time: 3600
 
-    - name: Instalar Nginx
+    - name: Instalar Nginx y git
       apt:
-        name: nginx
+        name:
+          - nginx
+          - git
         state: present
 
     - name: Iniciar servicio Nginx
@@ -17,6 +23,19 @@
         name: nginx
         state: started
         enabled: yes
+
+    - name: Eliminar pagina por defecto de Nginx
+      file:
+        path: /var/www/html/index.nginx-debian.html
+        state: absent
+
+    # Desplegar la app (Teclado) en la raiz del sitio
+    - name: Desplegar Teclado en /var/www/html
+      git:
+        repo: "{{ teclado_repo }}"
+        dest: /var/www/html
+        version: "{{ teclado_version }}"
+        force: yes
 
     - name: Cambiar propietario de /var/www/html
       file:
@@ -28,45 +47,52 @@
 - name: Instalación de Docker y Docker Compose en Ubuntu
   hosts: jenkins
   become: true
-  
+  vars:
+    jenkins_admin_user: admin
+    # Se genera la primera vez en secrets/ (no versionado) y se reutiliza despues
+    jenkins_admin_password: "{{ lookup('password', playbook_dir + '/secrets/jenkins_admin_password chars=ascii_letters,digits length=24') }}"
+
   tasks:
     # Actualizar el cache de paquetes
     - name: Actualizar el cache de paquetes
       apt:
         update_cache: yes
+        cache_valid_time: 3600
 
     # Instalar dependencias para Docker
     - name: Instalar dependencias para Docker
       apt:
-        name: 
-          - apt-transport-https
+        name:
           - ca-certificates
           - curl
-          - gnupg-agent
-          - software-properties-common
 
-    # Agregar la clave GPG oficial de Docker
-    - name: Agregar la clave GPG oficial de Docker
-      apt_key:
-        url: https://download.docker.com/linux/ubuntu/gpg
-        state: present
+    # Agregar el repositorio oficial de Docker (con su clave GPG)
+    - name: Agregar el repositorio de Docker
+      deb822_repository:
+        name: docker
+        types: deb
+        uris: https://download.docker.com/linux/ubuntu
+        suites: "{{ ansible_facts['distribution_release'] }}"
+        components: stable
+        architectures: amd64
+        signed_by: https://download.docker.com/linux/ubuntu/gpg
 
-    # Agregar el repositorio de Docker al sources.list.d
-    - name: Agregar el repositorio de Docker al sources.list.d
-      apt_repository:
-        repo: deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_lsb.codename }} stable
-        state: present
-
-    # Actualizar el cache de paquetes de nuevo (para que encuentre el paquete de Docker)
-    - name: Actualizar el cache de paquetes de nuevo (para que encuentre el paquete de Docker)
-      apt:
-        update_cache: yes
-
-    # Instalar Docker
+    # Instalar Docker y el plugin de Docker Compose
     - name: Instalar Docker
       apt:
-        name: docker-ce
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
         state: present
+        update_cache: yes
+
+    - name: Iniciar servicio Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
 
     # Añadir el usuario actual al grupo de Docker
     - name: Añadir el usuario actual al grupo de Docker
@@ -75,42 +101,44 @@
         groups: docker
         append: yes
 
-    # Instalar Docker Compose
-    - name: Instalar Docker Compose
-      shell: |
-        curl -L "https://github.com/docker/compose/releases/download/1.29.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-        chmod +x /usr/local/bin/docker-compose
-      args:
-        creates: /usr/local/bin/docker-compose
-    
+    # Requerido por Elasticsearch dentro de SonarQube
     - name: Establecer vm.max_map_count en el kernel
       sysctl:
         name: vm.max_map_count
         value: "262144"
         state: present
         reload: yes
-    
-    - name: Copiar archivo de configuración de Nginx
+
+    - name: Copiar docker-compose.yml
       copy:
         src: docker-compose.yml
         dest: /home/{{ ansible_user }}/docker-compose.yml
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+
+    - name: Credenciales del admin de Jenkins para docker compose
+      copy:
+        dest: /home/{{ ansible_user }}/.env
+        content: |
+          JENKINS_ADMIN_ID={{ jenkins_admin_user }}
+          JENKINS_ADMIN_PASSWORD={{ jenkins_admin_password }}
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+      no_log: true
+
+    # Imagen de Jenkins con python, node, sshpass y los plugins de plugins.txt
+    - name: Copiar build de la imagen de Jenkins
+      copy:
+        src: jenkins/
+        dest: /home/{{ ansible_user }}/jenkins/
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
 
     # Ejecutar un archivo docker-compose.yml
     - name: Ejecutar docker-compose.yml
-      command: docker-compose up -d
+      command: docker compose up -d --build
       args:
         chdir: /home/{{ ansible_user }}/
-      become_user: "{{ ansible_user }}"
-      become_method: su
-
-    - name: Instalar plugins jenkins
-      command: docker exec -it jenkins jenkins-plugin-cli --plugin-file /plugins.txt
-      become_user: "{{ ansible_user }}"
-      become_method: su
-      notify: restart jenkins
-
-  handlers:
-    - name: restart jenkins
-      command: sudo docker restart jenkins
-      become_user: "{{ ansible_user }}"
-      become_method: su
+      register: compose_up
+      changed_when: "'Started' in compose_up.stderr or 'Created' in compose_up.stderr or 'Recreated' in compose_up.stderr"

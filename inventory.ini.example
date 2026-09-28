@@ -1,0 +1,9 @@
+# Generado automaticamente por ../deploy.sh a partir de los outputs de Terraform
+[nginx]
+nginx ansible_host=<IP_NGINX>
+
+[jenkins]
+jenkins ansible_host=<IP_JENKINS>
+
+[all:vars]
+ansible_user=adminuser

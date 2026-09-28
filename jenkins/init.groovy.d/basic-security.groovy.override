@@ -1,0 +1,35 @@
+// Crea/actualiza el usuario admin a partir de variables de entorno y
+// exige login para todo (sin acceso anonimo).
+import jenkins.model.Jenkins
+import hudson.security.HudsonPrivateSecurityRealm
+import hudson.security.FullControlOnceLoggedInAuthorizationStrategy
+
+def env = System.getenv()
+def adminId = env['JENKINS_ADMIN_ID']
+def adminPassword = env['JENKINS_ADMIN_PASSWORD']
+
+if (!adminId || !adminPassword) {
+    println '--> JENKINS_ADMIN_ID/JENKINS_ADMIN_PASSWORD no definidos, no se configura seguridad'
+    return
+}
+
+def jenkins = Jenkins.get()
+
+def realm = jenkins.getSecurityRealm()
+if (!(realm instanceof HudsonPrivateSecurityRealm)) {
+    realm = new HudsonPrivateSecurityRealm(false)
+    jenkins.setSecurityRealm(realm)
+}
+def user = realm.getUser(adminId)
+if (user == null) {
+    realm.createAccount(adminId, adminPassword)
+} else {
+    user.addProperty(HudsonPrivateSecurityRealm.Details.fromPlainPassword(adminPassword))
+}
+
+def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
+strategy.setAllowAnonymousRead(false)
+jenkins.setAuthorizationStrategy(strategy)
+
+jenkins.save()
+println "--> Usuario ${adminId} configurado"
